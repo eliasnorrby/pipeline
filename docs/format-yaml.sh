@@ -23,13 +23,13 @@ find_next_pattern() {
 find_next_block_start() {
   local start=$1 file=$2
 
-  find_next_pattern "$start" "$file" '^```ya?ml[[:space:]]*$'
+  find_next_pattern "$start" "$file" '^[[:space:]]*```ya?ml[[:space:]]*$'
 }
 
 find_next_block_end() {
   local start=$1 file=$2
 
-  find_next_pattern "$start" "$file" '^```[[:space:]]*$'
+  find_next_pattern "$start" "$file" '^[[:space:]]*```[[:space:]]*$'
 }
 
 find_next_error() {
@@ -52,7 +52,11 @@ print_between_non_inclusive() {
 }
 
 format() {
-  prettier --parser yaml --print-width 200
+  prettier --parser yaml --print-width 200 "$@"
+}
+
+format_ruamel() {
+  python -c 'import sys;from ruamel.yaml import YAML;yaml=YAML();yaml.dump(yaml.load(sys.stdin),sys.stdout)'
 }
 
 update_block() {
@@ -62,15 +66,29 @@ update_block() {
   blockend=$(find_next_block_end "$start" "$file")
 
   format_block() {
-    print_between_non_inclusive "$blockstart" "$blockend" "$file" | format
+    print_between_non_inclusive "$blockstart" "$blockend" "$file" | format "$@"
+  }
+
+  format_block_ruamel() {
+    print_between_non_inclusive "$blockstart" "$blockend" "$file" | format_ruamel
+  }
+
+  format_check() {
+    format_block --check
   }
 
   if format_block > /dev/null 2>&1; then
-    format_block > formatted
+    if format_check > /dev/null 2>&1; then
+      echo "Block at $blockstart: OK"
+      return
+    fi
+
+    # format_block > formatted
+    format_block_ruamel > formatted
 
     write_to_block "$blockstart" "$blockend" "$file" formatted
 
-    echo "Block at $blockstart: OK"
+    echo "Block at $blockstart: CHANGED"
     return
   fi
 
@@ -172,17 +190,52 @@ process_errors() {
   done
 }
 
+num_blocks() {
+  grep -E '^[[:space:]]*```ya?ml[[:space:]]*$' "$1" -c
+}
+
+num_errors() {
+  grep '\[error\] stdin:' "$1" -c
+}
+
 process_files() {
-  local files
-  files=$(find . -type f -name '*.md')
+  local files=$1
 
   for file in $files; do
-    echo "About to format $file"
+    echo "About to format $file with $(num_blocks "$file") yaml blocks"
     # read -p "Enter to continue" -r
     format_file "$file"
   done
+}
+
+process_files_errors() {
+  local files=$1
+  for file in $files; do
+    if [ "$(num_errors "$file")" -gt 0 ]; then
+      echo "About to process $(num_errors "$file") errors in $file"
+      read -p "OK?" -r
+      process_errors "$file"
+    fi
+  done
+}
+
+find_files() {
+  local searchpath=$1 pattern=$2
+  find "$searchpath" -type f -name "$pattern"
+}
+
+main() {
+  local searchpath=${1:-.} pattern=${2:-'*.md'} files
+  files=$(find_files "$searchpath" "$pattern")
+  process_files "$files"
 
   echo "Errors:"
 
-  grep -rc '[error] stdin:' .
+  grep -rc '\[error\] stdin:' . | grep -v ':0$'
+
+  read -p "Process errors?" -r
+
+  process_files_errors "$files"
 }
+
+main "$@"
