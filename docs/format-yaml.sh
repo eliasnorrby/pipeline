@@ -59,14 +59,26 @@ format_ruamel() {
   python -c 'import sys;from ruamel.yaml import YAML;yaml=YAML();yaml.dump(yaml.load(sys.stdin),sys.stdout)'
 }
 
+remove_indent() {
+  local indent=$1
+  sed "s/^${indent}//"
+}
+
+prepend_indent() {
+  local indent=$1
+  sed "s/^/${indent}/"
+}
+
 update_block() {
-  local start=$1 file=$2 blockstart blockend
+  local start=$1 file=$2 blockstart blockend indent
 
   blockstart=$(find_next_block_start "$start" "$file")
   blockend=$(find_next_block_end "$start" "$file")
 
+  indent=$(sed "${blockstart}q;d" "$file" | grep -o '^[[:space:]]*')
+
   format_block() {
-    print_between_non_inclusive "$blockstart" "$blockend" "$file" | format "$@"
+    print_between_non_inclusive "$blockstart" "$blockend" "$file" | remove_indent "$indent" | format "$@"
   }
 
   format_block_ruamel() {
@@ -83,8 +95,8 @@ update_block() {
       return
     fi
 
-    # format_block > formatted
-    format_block_ruamel > formatted
+    format_block | prepend_indent "$indent" > formatted
+    # format_block_ruamel > formatted
 
     write_to_block "$blockstart" "$blockend" "$file" formatted
 
@@ -156,25 +168,29 @@ process_errors() {
     new_next=$(find_next_error "$next" "$file")
 
     if [ "$new_next" = "$next" ]; then
-      echo ">> Block at line $next still has errors."
+      echo ">> Block at line $blockstart still has errors."
 
-      local prompt_msg=" Edit again? [y/n/q] "
+      local prompt_msg=" Edit again? [y/s/i/q] (yes/skip/ignore/quit)"
       local choice
       read -p "$prompt_msg" -n 1 -r choice
       echo
-      local yes_no_regexp='([yY]|[yY][eE][sS]|[nN]|[nN][oO]|[qQ])'
-      while [[ ! $choice =~ $yes_no_regexp ]]; do
-        echo "Please type y or n or q"
+      local choice_regexp='([yY]|[sS]|[iI]|[qQ])'
+      while [[ ! $choice =~ $choice_regexp ]]; do
+        echo "Please type y or s or i or q"
         read -p "$prompt_msg" -n 1 -r choice
         echo
       done
 
       case $choice in
-        [yY]|[yY][eE][sS])
+        [yY])
           next=$new_next
           ;;
-        [nN]|[nN][oO])
+        [nS])
           next=$(find_next_error "$((new_next + 1))" "$file")
+          ;;
+        [iI])
+          sed -i.bak "${next}d" "$file" && rm "${file}.bak"
+          next=$(find_next_error "$next" "$file")
           ;;
         [qQ])
           exit 0
@@ -236,6 +252,8 @@ main() {
   read -p "Process errors?" -r
 
   process_files_errors "$files"
+
+  echo "Done!"
 }
 
 main "$@"
